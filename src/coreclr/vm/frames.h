@@ -767,12 +767,13 @@ protected:
 
 
 //-----------------------------------------------------------------------------
-// This frame provides context for a frame that
-// took an exception that is going to be resumed.
+// This frame provides a context for a code location at which
+// execution was interrupted and may be resumed,
+// such as asynchronous suspension or handling of an exception.
 //
 // It is necessary to create this frame if garbage
-// collection may happen during handling of the
-// exception.  The FRAME_ATTR_RESUMABLE flag tells
+// collection may happen during the interruption.
+// The FRAME_ATTR_RESUMABLE flag tells
 // the GC that the preceding frame needs to be treated
 // like the top of stack (with the important implication that
 // caller-save-registers will be potential roots).
@@ -820,35 +821,15 @@ public:
     }
 #endif
 
-protected:
-    PTR_CONTEXT m_Regs;
-
-    // Keep as last entry in class
-    DEFINE_VTABLE_GETTER_AND_CTOR_AND_DTOR(ResumableFrame)
-};
-
-
-//-----------------------------------------------------------------------------
-// RedirectedThreadFrame
-//-----------------------------------------------------------------------------
-
-class RedirectedThreadFrame : public ResumableFrame
-{
-    VPTR_VTABLE_CLASS(RedirectedThreadFrame, ResumableFrame)
-    VPTR_UNIQUE(VPTR_UNIQUE_RedirectedThreadFrame)
-
-public:
-#ifndef DACCESS_COMPILE
-    RedirectedThreadFrame(T_CONTEXT *regs) : ResumableFrame(regs) {
-        LIMITED_METHOD_CONTRACT;
-    }
-
-    virtual void ExceptionUnwind();
-#endif
-
     virtual void GcScanRoots(promote_func* fn, ScanContext* sc)
     {
         WRAPPER_NO_CONTRACT;
+
+        // The captured context may be provided by OS or by our own
+        // capture routine. The context may not necessary be on the
+        // stack or could be outside of reported stack range.
+        // To be sure that the registers in the context are reported
+        // in conservative root reporting, just report them here.
 #if defined(FEATURE_CONSERVATIVE_GC) && !defined(DACCESS_COMPILE)
         if (sc->promotion && g_pConfig->GetGCConservative())
         {
@@ -881,6 +862,32 @@ public:
         }
 #endif
     }
+
+protected:
+    PTR_CONTEXT m_Regs;
+
+    // Keep as last entry in class
+    DEFINE_VTABLE_GETTER_AND_CTOR_AND_DTOR(ResumableFrame)
+};
+
+
+//-----------------------------------------------------------------------------
+// RedirectedThreadFrame
+//-----------------------------------------------------------------------------
+
+class RedirectedThreadFrame : public ResumableFrame
+{
+    VPTR_VTABLE_CLASS(RedirectedThreadFrame, ResumableFrame)
+    VPTR_UNIQUE(VPTR_UNIQUE_RedirectedThreadFrame)
+
+public:
+#ifndef DACCESS_COMPILE
+    RedirectedThreadFrame(T_CONTEXT *regs) : ResumableFrame(regs) {
+        LIMITED_METHOD_CONTRACT;
+    }
+
+    virtual void ExceptionUnwind();
+#endif
 
     // Keep as last entry in class
     DEFINE_VTABLE_GETTER_AND_CTOR_AND_DTOR(RedirectedThreadFrame)
@@ -1252,7 +1259,7 @@ public:
         {
 #if defined(DACCESS_COMPILE)
             MachState unwoundState;
-            InsureInit(false, &unwoundState);
+            InsureInit(&unwoundState);
             return unwoundState.GetRetAddr();
 #else  // !DACCESS_COMPILE
             _ASSERTE(!"HMF's should always be initialized in the non-DAC world.");
@@ -1335,7 +1342,7 @@ public:
     }
 #endif // DACCESS_COMPILE
 
-    BOOL InsureInit(bool initialInit, struct MachState* unwindState);
+    BOOL InsureInit(struct MachState* unwindState);
 
     LazyMachState * MachineState() {
         LIMITED_METHOD_CONTRACT;
@@ -3181,8 +3188,8 @@ public:
     FrameType* operator&() { LIMITED_METHOD_CONTRACT; return &m_frame; }
     LazyMachState * MachineState() { WRAPPER_NO_CONTRACT; return m_frame.MachineState(); }
     Thread * GetThread() { WRAPPER_NO_CONTRACT; return m_frame.GetThread(); }
-    BOOL InsureInit(bool initialInit, struct MachState* unwindState)
-        { WRAPPER_NO_CONTRACT; return m_frame.InsureInit(initialInit, unwindState); }
+    BOOL InsureInit(struct MachState* unwindState)
+        { WRAPPER_NO_CONTRACT; return m_frame.InsureInit(unwindState); }
     void Poll() { WRAPPER_NO_CONTRACT; m_frame.Poll(); }
     void SetStackPointerPtr(TADDR sp) { WRAPPER_NO_CONTRACT; m_frame.SetStackPointerPtr(sp); }
     void InitAndLink(T_CONTEXT *pContext) { WRAPPER_NO_CONTRACT; m_frame.InitAndLink(pContext); }
@@ -3323,6 +3330,7 @@ public:
 #else // #ifndef DACCESS_COMPILE
 
 #define GCPROTECT_BEGIN(ObjRefStruct)
+#define GCPROTECT_BEGIN_THREAD(pThread, ObjRefStruct)
 #define GCPROTECT_ARRAY_BEGIN(ObjRefArray,cnt)
 #define GCPROTECT_BEGININTERIOR(ObjRefStruct)
 #define GCPROTECT_END()
